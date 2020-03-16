@@ -2,10 +2,10 @@ use rand::distributions::{Distribution, Uniform};
 use crate::network::{P, C, N_E, N_I, D_L, D_H, J_P, DT, N, MEM_SIZE};
 use crate::solve::*;
 
-const J_IE: f64 = 0.135;
-const J_EI: f64 = 0.25;
-const J_II: f64 = 0.20;
-const J_B:  f64 = 0.10;
+const J_IE: f64 = 0.135;// * 10.0;
+const J_EI: f64 = 0.25;// * 10.0;
+const J_II: f64 = 0.20;// * 10.0;
+const J_B:  f64 = 0.10;// * 10.0;
 // const J_P:  f64 = 0.45;
 const GAMMA_0: f64 = 0.10;
 // const DELTA: f64 = 0.001;
@@ -14,9 +14,14 @@ const U: f64 = 0.2;
 const TAU_F: f64 = 1.5;
 const TAU_D: f64 = 0.2;
 
-const N_DP: usize = ((MEM_SIZE as f64) * C) as usize;
-const N_DB: usize = N_DP * ( P - 1 );
+const N_NSP: usize = N_E - ((N_E * P) as f64 * C) as usize;
+const N_NSP_P: usize = ((N_NSP as f64) * GAMMA_0) as usize;
+const N_CH: usize = ((MEM_SIZE as f64) * C) as usize;
+const N_DP: usize = N_CH + N_NSP_P;
+const N_DB: usize = N_CH * ( P - 1 ) + N_NSP - N_NSP_P;
 const N_DI: usize = ((N_I as f64) * C) as usize;
+
+const MEM_P: usize = ((MEM_SIZE as f64) * GAMMA_0) as usize;
 
 pub trait Neuron {
     const THETA: f64;
@@ -53,7 +58,7 @@ impl Neuron for ExtNeuron {
         let u = U;
         let arp = 0;
         let mut d_p = Vec::new();
-        let mut d_b = Vec::new();
+        let mut d_b;
         if memory < P {
             d_p = Vec::with_capacity(N_DP);
             d_b = Vec::with_capacity(N_DB);
@@ -65,14 +70,24 @@ impl Neuron for ExtNeuron {
         let uni = Uniform::new(D_L, D_H);
         let mut start = 0;
         while start <= N_E {
-            let tmp = choice(N_DP, start, start+MEM_SIZE);
-            if memory < P && start / MEM_SIZE == memory {
-                for &i in tmp.iter() {
-                    d_p.push((i, uni.sample(&mut rand::thread_rng())));
+            let tmp = choice(N_CH, start, start+MEM_SIZE);
+            if memory < P {
+                if start / MEM_SIZE == memory {
+                    for &i in tmp.iter() {
+                        d_p.push((i, uni.sample(&mut rand::thread_rng())));
+                    }
+                } else {
+                    for &i in tmp.iter() {
+                        d_b.push((i, uni.sample(&mut rand::thread_rng())));
+                    }
                 }
             } else {
-                for &i in tmp.iter() {
-                    d_b.push((i, uni.sample(&mut rand::thread_rng())));
+                for (j, &i) in tmp.iter().enumerate() {
+                    if j < MEM_P {
+                        d_p.push((i, uni.sample(&mut rand::thread_rng())));
+                    } else {
+                        d_b.push((i, uni.sample(&mut rand::thread_rng())));
+                    }
                 }
             }
             start += MEM_SIZE;
@@ -95,6 +110,9 @@ impl Neuron for ExtNeuron {
             if self.arp == 0 {
                 self.v = ExtNeuron::V_R;
             }
+            s = 1;
+            self.u += rk4(|u: f64| self.dudt(u, 0), self.u, DT);
+            self.x += rk4(|x: f64| self.dxdt(x, 0), self.x, DT);
         } else {
             let mut i_rec = 0.0;
             for &(i, d) in self.d_p.iter() {
@@ -111,7 +129,7 @@ impl Neuron for ExtNeuron {
 
             for &(i, d) in self.d_i.iter() {
                 if d <= t && v_s[i][t-d] == 1 {
-                    i_rec += J_EI;
+                    i_rec -= J_EI;
                 }
             }
 
@@ -119,12 +137,15 @@ impl Neuron for ExtNeuron {
             if self.v >= ExtNeuron::THETA {
                 self.arp = ExtNeuron::TAU_ARP;
                 s = 1;
-                // self.u += U * (1.0 - self.u);
-                // self.x -= self.u * self.x;
+                //self.u += U * (1.0 - self.u) * 0.1;
+                //self.x -= self.u * self.x * 0.1;
             }
+            self.u += rk4(|u: f64| self.dudt(u, s), self.u, DT);
+            self.x += rk4(|x: f64| self.dxdt(x, s), self.x, DT);
+            // self.x = 1.0;
+            // self.u = 0.25;
         }
-        self.u += rk4(|u: f64| self.dudt(u, s), self.u, DT);
-        self.x += rk4(|x: f64| self.dxdt(x, s), self.x, DT);
+        
 
         (s, self.x, self.u)
     }
@@ -136,11 +157,11 @@ impl Neuron for ExtNeuron {
 
 impl ExtNeuron {
     fn dudt(&self, u: f64, s: u8) -> f64 {
-        ( U - u ) / TAU_F + U * ( 1.0 - u ) * (s as f64)
+        ( U - u ) / TAU_F + U * ( 1.0 - u ) * (s as f64) / DT
     }
 
     fn dxdt(&self, x: f64, s: u8) -> f64 {
-        ( 1.0 - x ) / TAU_D - self.u * x * (s as f64)
+        ( 1.0 - x ) / TAU_D - self.u * x * (s as f64) / DT
     }
 }
 
@@ -165,8 +186,8 @@ impl Neuron for InhNeuron {
 
         let uni = Uniform::new(D_L, D_H);
         let mut start = 0;
-        while start <= N_I {
-            let tmp = choice(N_DP, start, start+MEM_SIZE);
+        while start <= N_E {
+            let tmp = choice(N_CH, start, start+MEM_SIZE);
             for &i in tmp.iter() {
                 d_e.push((i, uni.sample(&mut rand::thread_rng())));
             }
@@ -190,6 +211,7 @@ impl Neuron for InhNeuron {
             if self.arp == 0 {
                 self.v = ExtNeuron::V_R;
             }
+            //s = 1;
         } else {
             let mut i_rec = 0.0;
             for &(i, d) in self.d_e.iter() {
@@ -200,7 +222,7 @@ impl Neuron for InhNeuron {
 
             for &(i, d) in self.d_i.iter() {
                 if d <= t && v_s[i][t-d] == 1 {
-                    i_rec += J_II;
+                    i_rec -= J_II;
                 }
             }
             

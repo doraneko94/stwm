@@ -9,7 +9,7 @@ pub const N_E: usize = 8000;
 pub const N_I: usize = 2000;
 pub const D_L: usize = 1;
 pub const D_H: usize = 6;
-pub const J_P: f64 = 0.45;
+pub const J_P: f64 = 0.45;// * 10.0;
 pub const DT: f64 = 0.001;
 
 pub const N: usize = N_E + N_I;
